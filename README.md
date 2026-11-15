@@ -1,6 +1,6 @@
 # Elevé — Streetwear Storefront & Production Tracker
 
-A full-stack e-commerce storefront and real-time production tracking dashboard built for **Elevé**, a Manila-based t-shirt brand shipping locally across the Philippines and internationally.
+A full-stack e-commerce storefront and private production tracking dashboard built for **Elevé**, a Legazpi City-based streetwear brand shipping locally across the Philippines and internationally.
 
 > **Live Interactive App:** [Open Hosted App](https://ais-pre-cpq4d7ioyuzgsme5lljzz5-581314554413.asia-east1.run.app)
 
@@ -19,16 +19,18 @@ GitHub stores the source code for inspection and download, while the interactive
 
 ### 1. Public Storefront
 - **Drop 01 Collection (4 Styles)**:
-  - *Elevé V1 — Keffiyeh Heavyweight Tee* (`₱1,290`)
+  - *Elevé V1 — Keffiyeh Boxy Tee* (`₱1,290`)
   - *Elevé V1 — Lumen Skeleton Tee* (`₱1,390`)
   - *Elevé Collection — Ascension Tee* (`₱1,490`)
   - *Elevé Collection — Essential Ash Tee* (`₱1,190`)
-- **Color & Size Selection**: Pick colorways and sizes (`XS`–`XL`), inspect product details, add items to the **Bag**, and submit a test checkout. Orders sync automatically to the Owner Tracker.
-- **Real-Time Order Tracker**: Look up sample order `ELV-101` (or your newly placed order ID) to watch live production stage progress and studio status messages.
-- **Ask Studio (Customer Chat)**: Open **Ask Studio** to send messages that appear immediately inside the Owner Tracker inbox.
+- **Drop 01 Lookbook & Quick Inspect**: Interactive hero spotlight cycling through the 4 signature pieces with instant quick-view sizing and color selection.
+- **Color, Size & Checkout**: Pick colorways and sizes (`XS`–`XL`), consult the interactive **Size & Fit Guide** (`in` / `cm`), add items to the **Bag**, and submit a test checkout. Orders sync automatically to the private Owner Tracker.
+- **Ask Studio (Customer Chat)**: Open **Ask Studio** to message the Legazpi City team in real time.
 
-### 2. Owner Production Tracker
-Click **Owner Tracker** in the top navigation bar (or **Owner Production Tracker** in the footer) to switch to the internal studio workspace:
+### 2. Private Owner Production Tracker (Demo Switch Included)
+The Owner Production Tracker is locked behind private owner authentication (`Owner Sign In` in the footer) so public shoppers cannot view studio orders, stock, or other customers' messages.
+
+To inspect the admin side during evaluation, click the visible **`Demo: Switch to Admin`** button in the bottom-left corner of the storefront (or click **`Demo: Customer View`** inside the tracker to return to the storefront):
 - **Overview Metrics**: `Total Active Orders`, `Orders in Production`, `Pending Materials`, and `Completed This Week`.
 - **6-Stage Kanban & Order Table**: Drag and drop orders across `New Order`, `Blank Sourcing`, `Design & Mockup`, `Printing`, `Quality Check`, and `Ready to Ship`, or push live customer status updates.
 - **Customer Chat Inbox**: Reply to storefront inquiries in real time and link conversations to order IDs.
@@ -88,4 +90,4 @@ This repository includes a `render.yaml` configuration for **Render**:
 ## Tech Stack
 - **Frontend:** React 19, TypeScript, Tailwind CSS v4, Lucide Icons
 - **Backend & Real-Time Sync:** Node.js, Express, `ws` (WebSockets)
-- **Persistence:** JSON store (`data/eleve-store-v2.json`, auto-seeded on first launch)
+- **Persistence:** JSON store (`data/eleve-store-v3.json`, auto-seeded on first launch)

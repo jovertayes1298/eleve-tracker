@@ -1,6 +1,7 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -11,8 +12,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
+const OWNER_PASSCODE = process.env.OWNER_PASSCODE || 'ELEVE2026';
 const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'eleve-store-v2.json');
+const DATA_FILE = path.join(DATA_DIR, 'eleve-store-v3.json');
 
 // ============================================================================
 // SERVER TYPES
@@ -130,7 +132,7 @@ function createInitialState(): StoreState {
       customerName: 'Marco Santos',
       destination: 'Makati, PH',
       isInternational: false,
-      itemName: 'Elevé V1 — Keffiyeh Heavyweight Tee',
+      itemName: 'Elevé V1 — Keffiyeh Boxy Tee',
       variant: 'Pitch Black',
       swatchHex: '#09090B',
       isCustom: false,
@@ -139,7 +141,7 @@ function createInitialState(): StoreState {
       totalPricePhp: 5160,
       dueDate: addDaysISO(now, 4),
       stage: 'Printing',
-      notes: '280GSM boxy blank; glow chest mark + lower hem print.',
+      notes: '280GSM boxy fit; glow chest mark + lower hem print.',
       createdAt: addDaysISO(now, -2),
       updates: [
         {
@@ -176,7 +178,7 @@ function createInitialState(): StoreState {
         {
           id: 'upd-102-1',
           stage: 'Blank Sourcing',
-          message: 'Verifying 260GSM Ash Grey blanks in Manila studio.',
+          message: 'Verifying 260GSM Ash Grey stock in Legazpi City studio.',
           timestamp: new Date(now.getTime() - 20 * 3600 * 1000).toISOString(),
         },
       ],
@@ -246,7 +248,7 @@ function createInitialState(): StoreState {
       customerName: 'Sofia Tan',
       destination: 'Cebu, PH',
       isInternational: false,
-      itemName: 'Elevé V1 — Keffiyeh Heavyweight Tee',
+      itemName: 'Elevé V1 — Keffiyeh Boxy Tee',
       variant: 'Optic White',
       swatchHex: '#FFFFFF',
       isCustom: false,
@@ -311,7 +313,7 @@ function createInitialState(): StoreState {
       unit: 'sheets',
       stock: 12,
       minThreshold: 25,
-      supplier: 'Manila Print Supply',
+      supplier: 'Legazpi Print Supply',
       lastUpdated: today,
     },
     {
@@ -331,21 +333,21 @@ function createInitialState(): StoreState {
     {
       id: 'chat-cust-101',
       customerName: 'Marco Santos',
-      location: 'Makati, PH',
-      productContext: 'Elevé V1 — Keffiyeh Heavyweight Tee (Pitch Black)',
+      location: 'Legazpi City, PH',
+      productContext: 'Elevé V1 — Keffiyeh Boxy Tee (Pitch Black)',
       linkedOrderId: 'ELV-101',
       unread: true,
       messages: [
         {
           id: 'm-101-1',
           sender: 'customer',
-          text: 'Hi! Ordered 4pcs of the Elevé V1 Keffiyeh Tee (ELV-101). When will printing wrap up?',
+          text: 'Hi! Ordered 4pcs of the Elevé V1 Keffiyeh Tee (ELV-101). When will it ship out?',
           timestamp: new Date(now.getTime() - 35 * 60 * 1000).toISOString(),
         },
         {
           id: 'm-101-2',
           sender: 'owner',
-          text: 'Hi Marco! Your Pitch Black blanks are on the press right now—we will update ELV-101 live as soon as QC starts.',
+          text: 'Hi Marco! Your Pitch Black tees are being prepared right now in our Legazpi City studio—we will dispatch once QC wraps up.',
           timestamp: new Date(now.getTime() - 28 * 60 * 1000).toISOString(),
         },
         {
@@ -373,7 +375,7 @@ function createInitialState(): StoreState {
         {
           id: 'm-102-2',
           sender: 'owner',
-          text: 'Hi Kenji! Our combed cotton blanks are pre-shrunk and enzyme washed, so shrinkage is under 2%.',
+          text: 'Hi Kenji! Our combed cotton jersey is pre-shrunk and enzyme washed, so shrinkage is under 2%.',
           timestamp: new Date(now.getTime() - 165 * 60 * 1000).toISOString(),
         },
       ],
@@ -428,29 +430,139 @@ async function startServer() {
 
   let state: StoreState = loadState();
 
+  const ownerSessions = new Map<string, { mode: 'owner' | 'demo'; createdAt: number }>();
+  const wsTokens = new WeakMap<WebSocket, string>();
+
+  function getOwnerToken(req: Request): string {
+    const headerToken = req.header('x-owner-token');
+    if (headerToken) return headerToken.trim();
+    const auth = req.header('authorization');
+    if (auth && auth.toLowerCase().startsWith('bearer ')) {
+      return auth.slice(7).trim();
+    }
+    return '';
+  }
+
+  function isValidOwnerToken(token?: string | null): boolean {
+    if (!token) return false;
+    return ownerSessions.has(token);
+  }
+
+  function requireOwner(req: Request, res: Response, next: NextFunction): void {
+    if (!isValidOwnerToken(getOwnerToken(req))) {
+      res.status(401).json({ error: 'Owner authentication required' });
+      return;
+    }
+    next();
+  }
+
+  function toPublicOrderReceipt(o: Order) {
+    return {
+      id: o.id,
+      itemName: o.itemName,
+      variant: o.variant,
+      quantity: o.quantity,
+      totalPricePhp: o.totalPricePhp,
+    };
+  }
+
   function broadcastState() {
     saveState(state);
-    const message = JSON.stringify({ type: 'state:sync', payload: state });
+    const ownerMsg = JSON.stringify({ type: 'state:sync', payload: state });
+    const publicMsg = JSON.stringify({ type: 'public:ping' });
+
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
+        const token = wsTokens.get(client);
+        client.send(isValidOwnerToken(token) ? ownerMsg : publicMsg);
       }
     });
   }
 
-  wss.on('connection', (ws) => {
-    ws.send(JSON.stringify({ type: 'state:sync', payload: state }));
+  wss.on('connection', (ws, req) => {
+    try {
+      const reqUrl = new URL(req.url || '/', 'http://localhost');
+      const token = reqUrl.searchParams.get('token') || '';
+      if (isValidOwnerToken(token)) {
+        wsTokens.set(ws, token);
+        ws.send(JSON.stringify({ type: 'state:sync', payload: state }));
+      } else {
+        ws.send(JSON.stringify({ type: 'public:ping' }));
+      }
+    } catch {
+      ws.send(JSON.stringify({ type: 'public:ping' }));
+    }
+
+    ws.on('message', (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString()) as { type?: string; token?: string };
+        if (msg.type === 'auth') {
+          if (msg.token && isValidOwnerToken(msg.token)) {
+            wsTokens.set(ws, msg.token);
+            ws.send(JSON.stringify({ type: 'state:sync', payload: state }));
+          } else {
+            wsTokens.delete(ws);
+          }
+        }
+      } catch {
+        // Ignore malformed WS payloads
+      }
+    });
   });
 
   // --------------------------------------------------------------------------
-  // REST API ROUTES
+  // OWNER & DEMO AUTHENTICATION ROUTES
   // --------------------------------------------------------------------------
 
-  app.get('/api/state', (_req: Request, res: Response) => {
+  app.post('/api/owner/login', (req: Request, res: Response) => {
+    const { passcode } = (req.body || {}) as { passcode?: string };
+    if (!passcode || passcode.trim() !== OWNER_PASSCODE) {
+      res.status(401).json({ error: 'Invalid studio passcode' });
+      return;
+    }
+    const token = crypto.randomUUID();
+    ownerSessions.set(token, { mode: 'owner', createdAt: Date.now() });
+    res.json({ token, mode: 'owner' });
+  });
+
+  app.post('/api/owner/demo-login', (_req: Request, res: Response) => {
+    const token = crypto.randomUUID();
+    ownerSessions.set(token, { mode: 'demo', createdAt: Date.now() });
+    res.json({ token, mode: 'demo' });
+  });
+
+  app.post('/api/owner/logout', (req: Request, res: Response) => {
+    const token = getOwnerToken(req);
+    if (token) ownerSessions.delete(token);
+    res.json({ ok: true });
+  });
+
+  // --------------------------------------------------------------------------
+  // PUBLIC STOREFRONT ROUTES (SCOPED — NO PRIVATE ADMIN OR TRACKER DATA EXPOSED)
+  // --------------------------------------------------------------------------
+
+  app.get('/api/public/chats/:id', (req: Request, res: Response) => {
+    const thread = state.chats.find((c) => c.id === req.params.id);
+    if (!thread) {
+      res.status(404).json({ error: 'Chat thread not found' });
+      return;
+    }
+    res.json(thread);
+  });
+
+  // --------------------------------------------------------------------------
+  // PROTECTED OWNER TRACKER ROUTES
+  // --------------------------------------------------------------------------
+
+  app.get('/api/owner/state', requireOwner, (_req: Request, res: Response) => {
     res.json(state);
   });
 
-  // Create order (from Storefront Checkout OR Owner Tracker)
+  app.get('/api/state', requireOwner, (_req: Request, res: Response) => {
+    res.json(state);
+  });
+
+  // Create order (from Storefront Checkout OR authenticated Owner Tracker)
   app.post('/api/orders', (req: Request, res: Response) => {
     const body = req.body as Partial<Order> & { updateMessage?: string };
     if (!body.customerName || !body.itemName || !body.variant) {
@@ -458,6 +570,7 @@ async function startServer() {
       return;
     }
 
+    const isOwner = isValidOwnerToken(getOwnerToken(req));
     const maxNum = state.orders.reduce((max, o) => {
       const match = o.id.match(/ELV-(\d+)/);
       const num = match ? parseInt(match[1], 10) : 100;
@@ -466,18 +579,18 @@ async function startServer() {
 
     const newId = `ELV-${maxNum + 1}`;
     const nowIso = new Date().toISOString();
-    const stage: ProductionStage = body.stage || 'New Order';
+    const stage: ProductionStage = isOwner ? body.stage || 'New Order' : 'New Order';
     const quantity = Math.max(1, Number(body.quantity) || 1);
 
     const newOrder: Order = {
       id: newId,
       customerName: body.customerName.trim(),
-      destination: (body.destination || 'Makati, PH').trim(),
+      destination: (body.destination || 'Legazpi City, PH').trim(),
       isInternational: Boolean(body.isInternational),
       itemName: body.itemName.trim(),
       variant: body.variant.trim(),
       swatchHex: body.swatchHex || '#09090B',
-      isCustom: Boolean(body.isCustom),
+      isCustom: isOwner ? Boolean(body.isCustom) : false,
       sizeBreakdown: body.sizeBreakdown || { XS: 0, S: 0, M: quantity, L: 0, XL: 0 },
       quantity,
       totalPricePhp: Number(body.totalPricePhp) || quantity * 1290,
@@ -486,12 +599,12 @@ async function startServer() {
       notes: (body.notes || '').trim(),
       createdAt: nowIso.split('T')[0],
       completedAt: stage === 'Ready to Ship' ? nowIso : undefined,
-      measurements: body.measurements,
+      measurements: isOwner ? body.measurements : undefined,
       updates: [
         {
           id: `upd-${Date.now()}`,
           stage,
-          message: body.updateMessage || `Order ${newId} received by Manila Studio.`,
+          message: body.updateMessage || `Order ${newId} received by Legazpi City Studio.`,
           timestamp: nowIso,
         },
       ],
@@ -499,11 +612,11 @@ async function startServer() {
 
     state.orders = [newOrder, ...state.orders];
     broadcastState();
-    res.status(201).json(newOrder);
+    res.status(201).json(isOwner ? newOrder : toPublicOrderReceipt(newOrder));
   });
 
-  // Update order (stage change, edit details, measurements, or live customer update)
-  app.patch('/api/orders/:id', (req: Request, res: Response) => {
+  // Update order (owner-only)
+  app.patch('/api/orders/:id', requireOwner, (req: Request, res: Response) => {
     const id = req.params.id;
     const idx = state.orders.findIndex((o) => o.id === id);
     if (idx === -1) {
@@ -562,15 +675,15 @@ async function startServer() {
     res.json(updated);
   });
 
-  app.delete('/api/orders/:id', (req: Request, res: Response) => {
+  app.delete('/api/orders/:id', requireOwner, (req: Request, res: Response) => {
     const id = req.params.id;
     state.orders = state.orders.filter((o) => o.id !== id);
     broadcastState();
     res.json({ deleted: id });
   });
 
-  // Materials CRUD
-  app.post('/api/materials', (req: Request, res: Response) => {
+  // Materials CRUD (owner-only)
+  app.post('/api/materials', requireOwner, (req: Request, res: Response) => {
     const body = req.body as Omit<MaterialItem, 'id' | 'lastUpdated'>;
     if (!body.name) {
       res.status(400).json({ error: 'Material name is required' });
@@ -586,7 +699,7 @@ async function startServer() {
     res.status(201).json(newItem);
   });
 
-  app.patch('/api/materials/:id', (req: Request, res: Response) => {
+  app.patch('/api/materials/:id', requireOwner, (req: Request, res: Response) => {
     const id = req.params.id;
     const idx = state.materials.findIndex((m) => m.id === id);
     if (idx === -1) {
@@ -613,14 +726,14 @@ async function startServer() {
     res.json(updated);
   });
 
-  app.delete('/api/materials/:id', (req: Request, res: Response) => {
+  app.delete('/api/materials/:id', requireOwner, (req: Request, res: Response) => {
     const id = req.params.id;
     state.materials = state.materials.filter((m) => m.id !== id);
     broadcastState();
     res.json({ deleted: id });
   });
 
-  // Customer-only Chat Threads
+  // Customer-only Chat Threads (customers can create/reply; owner replies require owner auth)
   app.post('/api/chats', (req: Request, res: Response) => {
     const body = req.body as {
       id?: string;
@@ -631,6 +744,11 @@ async function startServer() {
       initialMessage?: string;
       sender?: 'owner' | 'customer';
     };
+
+    if (body.sender === 'owner' && !isValidOwnerToken(getOwnerToken(req))) {
+      res.status(401).json({ error: 'Owner authentication required' });
+      return;
+    }
 
     if (!body.customerName?.trim()) {
       res.status(400).json({ error: 'customerName is required' });
@@ -652,12 +770,12 @@ async function startServer() {
       location: (body.location || 'Philippines').trim(),
       productContext: body.productContext,
       linkedOrderId: body.linkedOrderId,
-      unread: body.sender === 'customer',
+      unread: body.sender !== 'owner',
       messages: body.initialMessage
         ? [
             {
               id: `msg-${Date.now()}`,
-              sender: body.sender || 'customer',
+              sender: body.sender === 'owner' ? 'owner' : 'customer',
               text: body.initialMessage.trim(),
               timestamp: nowIso,
             },
@@ -684,6 +802,11 @@ async function startServer() {
       productContext?: string;
     };
 
+    if (sender === 'owner' && !isValidOwnerToken(getOwnerToken(req))) {
+      res.status(401).json({ error: 'Owner authentication required' });
+      return;
+    }
+
     if (!text?.trim()) {
       res.status(400).json({ error: 'text is required' });
       return;
@@ -706,7 +829,7 @@ async function startServer() {
     res.status(201).json(msg);
   });
 
-  app.patch('/api/chats/:id', (req: Request, res: Response) => {
+  app.patch('/api/chats/:id', requireOwner, (req: Request, res: Response) => {
     const id = req.params.id;
     const thread = state.chats.find((c) => c.id === id);
     if (!thread) {
@@ -723,7 +846,7 @@ async function startServer() {
     res.json(thread);
   });
 
-  app.post('/api/reset', (_req: Request, res: Response) => {
+  app.post('/api/reset', requireOwner, (_req: Request, res: Response) => {
     state = createInitialState();
     broadcastState();
     res.json(state);

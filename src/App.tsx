@@ -11,6 +11,8 @@ import {
   GripVertical,
   Layers,
   LayoutGrid,
+  Lock,
+  LogOut,
   Menu,
   MessageSquare,
   Minus,
@@ -21,6 +23,7 @@ import {
   Ruler,
   Search,
   Send,
+  ShieldCheck,
   Shirt,
   ShoppingBag,
   Table as TableIcon,
@@ -99,6 +102,14 @@ interface Order {
   updates: OrderUpdateEntry[];
 }
 
+interface OrderReceipt {
+  id: string;
+  itemName: string;
+  variant: string;
+  quantity: number;
+  totalPricePhp: number;
+}
+
 type MaterialCategory = 'Blank Tees' | 'Print & Ink' | 'Labels & Packaging';
 
 interface MaterialItem {
@@ -167,14 +178,14 @@ const ELEVE_LOGO_SRC = '/assets/aistudio/instappa-post-DV08ZM_j44l_65b01847.webp
 const STORE_PRODUCTS: StoreProduct[] = [
   {
     id: 'tee-v1-keffiyeh',
-    name: 'Elevé V1 — Keffiyeh Heavyweight Tee',
+    name: 'Elevé V1 — Keffiyeh Boxy Tee',
     subtitle: 'Drop 01 · Signature Graphic',
     pricePhp: 1290,
     gsm: '280 GSM',
     fit: 'Boxy Cropped Fit',
     image: '/assets/aistudio/instappa-post-DfgHCkKj1eA-1_c83688f2.webp',
     description:
-      'Cut from heavyweight 280GSM combed cotton featuring our glowing Elevé chest mark and high-contrast monochrome portrait print. Printed to order in our Manila studio.',
+      'Cut from structured 280GSM combed cotton featuring our glowing Elevé chest mark and high-contrast monochrome portrait graphic. Designed in Legazpi City.',
     colors: [
       { name: 'Pitch Black', hex: '#09090B' },
       { name: 'Washed Charcoal', hex: '#3F3F46' },
@@ -206,7 +217,7 @@ const STORE_PRODUCTS: StoreProduct[] = [
     fit: 'Oversized Street Fit',
     image: '/assets/aistudio/instappa-post-DV1IXFAjxQE_25a5fdcf.webp',
     description:
-      'Oversized 300GSM jersey spotlighting the ELEVÉ COLLECTION light-beam typography and wireframe ascension print. Ships locally and worldwide.',
+      'Oversized 300GSM jersey spotlighting the ELEVÉ COLLECTION light-beam typography and wireframe ascension print. Ships across the Philippines and worldwide.',
     colors: [
       { name: 'Pitch Black', hex: '#09090B' },
       { name: 'Slate Charcoal', hex: '#334155' },
@@ -222,7 +233,7 @@ const STORE_PRODUCTS: StoreProduct[] = [
     fit: 'Relaxed Box Cut',
     image: '/assets/aistudio/instappa-post-DWXwXhtj9LH-1_51fdc037.webp',
     description:
-      'Enzyme-washed 260GSM ash jersey tailored for humid Manila days and clean everyday layering, finished with minimal Elevé Collection chest typography and woven hem label.',
+      'Enzyme-washed 260GSM ash jersey tailored for warm coastal days in Legazpi City and clean everyday layering, finished with minimal Elevé Collection chest typography.',
     colors: [
       { name: 'Ash Grey', hex: '#D4D4D8' },
       { name: 'Pitch Black', hex: '#09090B' },
@@ -231,11 +242,25 @@ const STORE_PRODUCTS: StoreProduct[] = [
   },
 ];
 
+const SIZE_CHART_SPECS: Array<{
+  size: StandardSize;
+  chestIn: number;
+  lengthIn: number;
+  shoulderIn: number;
+}> = [
+  { size: 'XS', chestIn: 20.5, lengthIn: 26.5, shoulderIn: 19.5 },
+  { size: 'S', chestIn: 21.5, lengthIn: 27.5, shoulderIn: 20.5 },
+  { size: 'M', chestIn: 22.5, lengthIn: 28.5, shoulderIn: 21.5 },
+  { size: 'L', chestIn: 23.5, lengthIn: 29.5, shoulderIn: 22.5 },
+  { size: 'XL', chestIn: 24.5, lengthIn: 30.5, shoulderIn: 23.5 },
+];
+
 const LOCAL_CUSTOMER_KEYS = {
   CART: 'eleve_shopper_cart_v1',
-  MY_ORDERS: 'eleve_shopper_order_ids_v1',
   CHAT_ID: 'eleve_shopper_chat_id_v1',
   PROFILE: 'eleve_shopper_profile_v1',
+  OWNER_TOKEN: 'eleve_owner_token_v1',
+  OWNER_MODE: 'eleve_owner_mode_v1',
 };
 
 // ============================================================================
@@ -408,19 +433,44 @@ function ProductGarmentImage({
 // ============================================================================
 
 export default function App() {
-  // Server-authoritative synced state
+  // Owner Auth & Scoped Public Storefront State
+  const [ownerToken, setOwnerToken] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem(LOCAL_CUSTOMER_KEYS.OWNER_TOKEN);
+    } catch {
+      return null;
+    }
+  });
+  const [ownerMode, setOwnerMode] = useState<'owner' | 'demo' | null>(() => {
+    try {
+      const m = sessionStorage.getItem(LOCAL_CUSTOMER_KEYS.OWNER_MODE);
+      return m === 'owner' || m === 'demo' ? m : null;
+    } catch {
+      return null;
+    }
+  });
+  const [ownerAuthModalOpen, setOwnerAuthModalOpen] = useState(false);
+  const [passcodeInput, setPasscodeInput] = useState('');
+  const [passcodeError, setPasscodeError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // Public Storefront Server State (customer chat only — no private admin records exposed)
+  const [publicCustomerThread, setPublicCustomerThread] = useState<ChatThread | null>(null);
+
+  // Owner-only Server State
   const [orders, setOrders] = useState<Order[]>([]);
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [chats, setChats] = useState<ChatThread[]>([]);
-  const [loadingState, setLoadingState] = useState(true);
 
-  // Surface Switch: Public Storefront vs Owner Tracker
+  // Surface Switch: Public Storefront vs Private Owner Tracker
   const [surface, setSurface] = useState<AppSurface>('storefront');
   const [trackerTab, setTrackerTab] = useState<TrackerTab>('orders');
   const [viewMode, setViewMode] = useState<OrdersViewMode>('kanban');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Storefront State
+  const [spotlightIndex, setSpotlightIndex] = useState(0);
+  const [sizeChartUnit, setSizeChartUnit] = useState<'in' | 'cm'>('in');
   const [selectedColors, setSelectedColors] = useState<Record<string, ProductColorOption>>(() => {
     const map: Record<string, ProductColorOption> = {};
     for (const p of STORE_PRODUCTS) map[p.id] = p.colors[0];
@@ -443,17 +493,7 @@ export default function App() {
     return [];
   });
   const [cartOpen, setCartOpen] = useState(false);
-  const [myOrderIds, setMyOrderIds] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_CUSTOMER_KEYS.MY_ORDERS);
-      if (saved) return JSON.parse(saved);
-    } catch {
-      // Ignore
-    }
-    return ['ELV-101'];
-  });
-  const [trackOrderInput, setTrackOrderInput] = useState('ELV-101');
-  const [lastPlacedOrders, setLastPlacedOrders] = useState<Order[]>([]);
+  const [lastPlacedOrders, setLastPlacedOrders] = useState<OrderReceipt[]>([]);
 
   // Checkout Form
   const [checkoutName, setCheckoutName] = useState(() => {
@@ -468,11 +508,11 @@ export default function App() {
   const [checkoutDestination, setCheckoutDestination] = useState(() => {
     try {
       const saved = localStorage.getItem(LOCAL_CUSTOMER_KEYS.PROFILE);
-      if (saved) return JSON.parse(saved).location || 'Makati, PH';
+      if (saved) return JSON.parse(saved).location || 'Legazpi City, PH';
     } catch {
       // Ignore
     }
-    return 'Makati, PH';
+    return 'Legazpi City, PH';
   });
   const [checkoutIntl, setCheckoutIntl] = useState(false);
   const [checkoutNotes, setCheckoutNotes] = useState('');
@@ -517,7 +557,7 @@ export default function App() {
   const [editingMaterial, setEditingMaterial] = useState<MaterialItem | null>(null);
   const [confirmResetOpen, setConfirmResetOpen] = useState(false);
 
-  const trackSectionRef = useRef<HTMLElement | null>(null);
+  const fitGuideRef = useRef<HTMLElement | null>(null);
   const collectionSectionRef = useRef<HTMLElement | null>(null);
 
   // Persist local shopper session
@@ -528,14 +568,6 @@ export default function App() {
       // Ignore
     }
   }, [cart]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(LOCAL_CUSTOMER_KEYS.MY_ORDERS, JSON.stringify(myOrderIds));
-    } catch {
-      // Ignore
-    }
-  }, [myOrderIds]);
 
   useEffect(() => {
     try {
@@ -556,45 +588,127 @@ export default function App() {
     }
   }, [checkoutName, checkoutDestination]);
 
-  // Real-time Server Synchronization via WebSocket + Initial HTTP Fetch
+  const clearOwnerSession = () => {
+    setOwnerToken(null);
+    setOwnerMode(null);
+    setOrders([]);
+    setMaterials([]);
+    setChats([]);
+    setSurface('storefront');
+    try {
+      sessionStorage.removeItem(LOCAL_CUSTOMER_KEYS.OWNER_TOKEN);
+      sessionStorage.removeItem(LOCAL_CUSTOMER_KEYS.OWNER_MODE);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const persistOwnerSession = (token: string, mode: 'owner' | 'demo') => {
+    setOwnerToken(token);
+    setOwnerMode(mode);
+    try {
+      sessionStorage.setItem(LOCAL_CUSTOMER_KEYS.OWNER_TOKEN, token);
+      sessionStorage.setItem(LOCAL_CUSTOMER_KEYS.OWNER_MODE, mode);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const ownerFetch = async (url: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    if (!headers.has('Content-Type') && init.body) {
+      headers.set('Content-Type', 'application/json');
+    }
+    if (ownerToken) {
+      headers.set('x-owner-token', ownerToken);
+    }
+    const resp = await fetch(url, { ...init, headers });
+    if (resp.status === 401) {
+      clearOwnerSession();
+    }
+    return resp;
+  };
+
+  // Load active customer chat thread (scoped — no private admin data)
+  const refreshPublicChat = async (chatId: string | null) => {
+    if (!chatId) {
+      setPublicCustomerThread(null);
+      return;
+    }
+    try {
+      const chatRes = await fetch(`/api/public/chats/${encodeURIComponent(chatId)}`);
+      if (chatRes.ok) {
+        setPublicCustomerThread((await chatRes.json()) as ChatThread);
+      } else {
+        setPublicCustomerThread(null);
+      }
+    } catch {
+      // Ignore transient network errors
+    }
+  };
+
+  useEffect(() => {
+    refreshPublicChat(customerChatId);
+  }, [customerChatId]);
+
+  // Fetch private owner state whenever an ownerToken is active
+  useEffect(() => {
+    if (!ownerToken) return;
+    let cancelled = false;
+    const loadOwner = async () => {
+      try {
+        const res = await fetch('/api/owner/state', {
+          headers: { 'x-owner-token': ownerToken },
+        });
+        if (res.status === 401) {
+          if (!cancelled) clearOwnerSession();
+          return;
+        }
+        if (res.ok && !cancelled) {
+          const data = (await res.json()) as {
+            orders: Order[];
+            materials: MaterialItem[];
+            chats: ChatThread[];
+          };
+          setOrders(data.orders);
+          setMaterials(data.materials);
+          setChats(data.chats);
+        }
+      } catch {
+        // Ignore transient network errors
+      }
+    };
+    loadOwner();
+    return () => {
+      cancelled = true;
+    };
+  }, [ownerToken]);
+
+  // Real-time WebSocket synchronization (scoped by ownerToken)
+  const customerChatIdRef = useRef(customerChatId);
+  customerChatIdRef.current = customerChatId;
+
   useEffect(() => {
     let ws: WebSocket | null = null;
     let reconnectTimer: number | null = null;
     let unmounted = false;
 
-    const applySync = (payload: {
-      orders: Order[];
-      materials: MaterialItem[];
-      chats: ChatThread[];
-    }) => {
-      setOrders(payload.orders);
-      setMaterials(payload.materials);
-      setChats(payload.chats);
-      setLoadingState(false);
-    };
-
-    const loadInitial = async () => {
-      try {
-        const res = await fetch('/api/state');
-        if (res.ok && !unmounted) {
-          const data = await res.json();
-          applySync(data);
-        }
-      } catch {
-        setLoadingState(false);
-      }
-    };
-
     const connectWs = () => {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/ws`;
+      const tokenParam = ownerToken ? `?token=${encodeURIComponent(ownerToken)}` : '';
+      const wsUrl = `${protocol}//${window.location.host}/ws${tokenParam}`;
       ws = new WebSocket(wsUrl);
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'state:sync' && msg.payload) {
-            applySync(msg.payload);
+            setOrders(msg.payload.orders);
+            setMaterials(msg.payload.materials);
+            setChats(msg.payload.chats);
+            refreshPublicChat(customerChatIdRef.current);
+          } else if (msg.type === 'public:ping') {
+            refreshPublicChat(customerChatIdRef.current);
           }
         } catch {
           // Ignore malformed message
@@ -608,7 +722,6 @@ export default function App() {
       };
     };
 
-    loadInitial();
     connectWs();
 
     return () => {
@@ -616,7 +729,7 @@ export default function App() {
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
-  }, []);
+  }, [ownerToken]);
 
   // Keep selectedOwnerChatId initialized when chats load
   useEffect(() => {
@@ -642,16 +755,7 @@ export default function App() {
     [cart]
   );
 
-  const trackedOrder = useMemo(() => {
-    const q = trackOrderInput.trim().toUpperCase();
-    if (!q) return null;
-    return orders.find((o) => o.id.toUpperCase() === q) ?? null;
-  }, [orders, trackOrderInput]);
-
-  const activeCustomerThread = useMemo(
-    () => chats.find((c) => c.id === customerChatId) ?? null,
-    [chats, customerChatId]
-  );
+  const activeCustomerThread = publicCustomerThread;
 
   const metrics = useMemo(() => {
     const activeOrders = orders.filter((o) => o.stage !== 'Ready to Ship');
@@ -820,7 +924,7 @@ export default function App() {
         groups.set(gKey, existing);
       }
 
-      const createdOrders: Order[] = [];
+      const createdOrders: OrderReceipt[] = [];
       for (const group of groups.values()) {
         const resp = await fetch('/api/orders', {
           method: 'POST',
@@ -837,20 +941,17 @@ export default function App() {
             quantity: group.quantity,
             totalPricePhp: group.totalPricePhp,
             stage: 'New Order',
-            notes: checkoutNotes.trim() || 'Placed via Eleve Storefront.',
-            updateMessage: `Order placed on Eleve Storefront (${group.quantity} pcs · ${group.colorName}).`,
+            notes: checkoutNotes.trim() || 'Placed via Elevé Storefront.',
+            updateMessage: `Order placed on Elevé Storefront (${group.quantity} pcs · ${group.colorName}).`,
           }),
         });
         if (resp.ok) {
-          const created = (await resp.json()) as Order;
+          const created = (await resp.json()) as OrderReceipt;
           createdOrders.push(created);
         }
       }
 
       if (createdOrders.length > 0) {
-        const newIds = createdOrders.map((o) => o.id);
-        setMyOrderIds((prev) => Array.from(new Set([...newIds, ...prev])));
-        setTrackOrderInput(createdOrders[0].id);
         setLastPlacedOrders(createdOrders);
         setCart([]);
         setCheckoutNotes('');
@@ -875,7 +976,7 @@ export default function App() {
     if (!text) return;
 
     const name = (shopperNameInput || checkoutName || 'Storefront Guest').trim();
-    const location = (shopperLocationInput || checkoutDestination || 'Philippines').trim();
+    const location = (shopperLocationInput || checkoutDestination || 'Legazpi City, PH').trim();
 
     if (!activeCustomerThread) {
       const resp = await fetch('/api/chats', {
@@ -885,7 +986,6 @@ export default function App() {
           customerName: name,
           location,
           productContext: customerChatProductContext,
-          linkedOrderId: myOrderIds[0],
           initialMessage: text,
           sender: 'customer',
         }),
@@ -893,6 +993,7 @@ export default function App() {
       if (resp.ok) {
         const created = (await resp.json()) as ChatThread;
         setCustomerChatId(created.id);
+        setPublicCustomerThread(created);
         setCheckoutName(name);
         setCheckoutDestination(location);
         setCustomerDraft('');
@@ -909,33 +1010,92 @@ export default function App() {
       });
       if (resp.ok) {
         setCustomerDraft('');
+        refreshPublicChat(activeCustomerThread.id);
       }
     }
   };
 
   // ============================================================================
-  // OWNER TRACKER HANDLERS (SERVER-AUTHORITATIVE)
+  // OWNER & DEMO AUTH HANDLERS
+  // ============================================================================
+
+  const handleOwnerPasscodeLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!passcodeInput.trim() || authLoading) return;
+    setAuthLoading(true);
+    setPasscodeError('');
+    try {
+      const resp = await fetch('/api/owner/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: passcodeInput.trim() }),
+      });
+      if (!resp.ok) {
+        setPasscodeError('Incorrect studio passcode.');
+        return;
+      }
+      const data = (await resp.json()) as { token: string; mode: 'owner' };
+      persistOwnerSession(data.token, data.mode);
+      setPasscodeInput('');
+      setOwnerAuthModalOpen(false);
+      setSurface('tracker');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleDemoSwitchToAdmin = async () => {
+    if (ownerToken) {
+      setOwnerAuthModalOpen(false);
+      setSurface('tracker');
+      return;
+    }
+    if (authLoading) return;
+    setAuthLoading(true);
+    try {
+      const resp = await fetch('/api/owner/demo-login', { method: 'POST' });
+      if (resp.ok) {
+        const data = (await resp.json()) as { token: string; mode: 'demo' };
+        persistOwnerSession(data.token, data.mode);
+        setOwnerAuthModalOpen(false);
+        setSurface('tracker');
+      }
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleOwnerLogout = async () => {
+    if (ownerToken) {
+      await fetch('/api/owner/logout', {
+        method: 'POST',
+        headers: { 'x-owner-token': ownerToken },
+      });
+    }
+    clearOwnerSession();
+  };
+
+  // ============================================================================
+  // OWNER TRACKER HANDLERS (SERVER-AUTHORITATIVE & AUTHENTICATED)
   // ============================================================================
 
   const handleStageChange = async (orderId: string, nextStage: ProductionStage) => {
-    await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+    await ownerFetch(`/api/orders/${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stage: nextStage }),
     });
   };
 
   const handleSendLiveOrderUpdate = async (orderId: string, stage: ProductionStage, message: string) => {
-    await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+    await ownerFetch(`/api/orders/${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stage, liveUpdateMessage: message }),
     });
     setLiveUpdateOrder(null);
   };
 
   const handleDeleteOrder = async (orderId: string) => {
-    await fetch(`/api/orders/${encodeURIComponent(orderId)}`, { method: 'DELETE' });
+    await ownerFetch(`/api/orders/${encodeURIComponent(orderId)}`, { method: 'DELETE' });
   };
 
   const handleSaveOrder = async (
@@ -943,15 +1103,13 @@ export default function App() {
     existingId?: string
   ) => {
     if (existingId) {
-      await fetch(`/api/orders/${encodeURIComponent(existingId)}`, {
+      await ownerFetch(`/api/orders/${encodeURIComponent(existingId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
     } else {
-      await fetch('/api/orders', {
+      await ownerFetch('/api/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
     }
@@ -960,27 +1118,24 @@ export default function App() {
   };
 
   const handleSaveMeasurements = async (orderId: string, specs: CustomMeasurements) => {
-    await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+    await ownerFetch(`/api/orders/${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ isCustom: true, measurements: specs }),
     });
     setMeasurementOrderId(null);
   };
 
   const handleClearMeasurements = async (orderId: string) => {
-    await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+    await ownerFetch(`/api/orders/${encodeURIComponent(orderId)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clearMeasurements: true }),
     });
     setMeasurementOrderId(null);
   };
 
   const handleAdjustStock = async (materialId: string, delta: number) => {
-    await fetch(`/api/materials/${encodeURIComponent(materialId)}`, {
+    await ownerFetch(`/api/materials/${encodeURIComponent(materialId)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ delta }),
     });
   };
@@ -990,15 +1145,13 @@ export default function App() {
     existingId?: string
   ) => {
     if (existingId) {
-      await fetch(`/api/materials/${encodeURIComponent(existingId)}`, {
+      await ownerFetch(`/api/materials/${encodeURIComponent(existingId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
     } else {
-      await fetch('/api/materials', {
+      await ownerFetch('/api/materials', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
     }
@@ -1007,7 +1160,7 @@ export default function App() {
   };
 
   const handleDeleteMaterial = async (materialId: string) => {
-    await fetch(`/api/materials/${encodeURIComponent(materialId)}`, { method: 'DELETE' });
+    await ownerFetch(`/api/materials/${encodeURIComponent(materialId)}`, { method: 'DELETE' });
   };
 
   const handleOpenCustomerChatInTracker = async (order: Order) => {
@@ -1019,16 +1172,14 @@ export default function App() {
     if (existing) {
       setSelectedOwnerChatId(existing.id);
       if (existing.unread) {
-        await fetch(`/api/chats/${encodeURIComponent(existing.id)}`, {
+        await ownerFetch(`/api/chats/${encodeURIComponent(existing.id)}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ unread: false }),
         });
       }
     } else {
-      const resp = await fetch('/api/chats', {
+      const resp = await ownerFetch('/api/chats', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           customerName: order.customerName,
           location: order.destination,
@@ -1051,9 +1202,8 @@ export default function App() {
     setSelectedOwnerChatId(chat.id);
     setMobileShowOwnerThread(true);
     if (chat.unread) {
-      await fetch(`/api/chats/${encodeURIComponent(chat.id)}`, {
+      await ownerFetch(`/api/chats/${encodeURIComponent(chat.id)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ unread: false }),
       });
     }
@@ -1064,15 +1214,14 @@ export default function App() {
     if (!activeOwnerChat || !ownerDraft.trim()) return;
     const text = ownerDraft.trim();
     setOwnerDraft('');
-    await fetch(`/api/chats/${encodeURIComponent(activeOwnerChat.id)}/messages`, {
+    await ownerFetch(`/api/chats/${encodeURIComponent(activeOwnerChat.id)}/messages`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sender: 'owner', text }),
     });
   };
 
   const handleResetDemoData = async () => {
-    await fetch('/api/reset', { method: 'POST' });
+    await ownerFetch('/api/reset', { method: 'POST' });
     setConfirmResetOpen(false);
   };
 
@@ -1106,10 +1255,13 @@ export default function App() {
   // RENDER: PUBLIC STOREFRONT MODE
   // ============================================================================
 
-  if (surface === 'storefront') {
+  if (surface === 'storefront' || !ownerToken) {
+    const spotlightProduct = STORE_PRODUCTS[spotlightIndex] ?? STORE_PRODUCTS[0];
+    const spotlightColor = selectedColors[spotlightProduct.id] ?? spotlightProduct.colors[0];
+
     return (
       <div className="min-h-screen bg-white text-zinc-950 flex flex-col">
-        {/* Clean 3-Zone Top Bar Contract */}
+        {/* Clean 3-Zone Top Bar Contract (Customer Storefront Only) */}
         <header className="sticky top-0 z-30 h-16 bg-white/95 backdrop-blur-xs border-b border-zinc-200 px-4 sm:px-6 lg:px-10 flex items-center justify-between gap-6">
           <button
             type="button"
@@ -1130,10 +1282,10 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => trackSectionRef.current?.scrollIntoView({ behavior: 'smooth' })}
+              onClick={() => fitGuideRef.current?.scrollIntoView({ behavior: 'smooth' })}
               className="hover:text-zinc-950 transition-colors whitespace-nowrap shrink-0"
             >
-              Track Order
+              Size &amp; Fit
             </button>
             <button
               type="button"
@@ -1142,23 +1294,9 @@ export default function App() {
             >
               Ask Studio
             </button>
-            <button
-              type="button"
-              onClick={() => setSurface('tracker')}
-              className="hover:text-zinc-950 transition-colors whitespace-nowrap shrink-0"
-            >
-              Owner Tracker
-            </button>
           </nav>
 
           <div className="flex items-center gap-2.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => setSurface('tracker')}
-              className="md:hidden px-3 py-2 text-xs font-medium text-zinc-700 border border-zinc-200 rounded-lg hover:bg-zinc-50 whitespace-nowrap shrink-0"
-            >
-              Owner Tracker
-            </button>
             <button
               type="button"
               onClick={() => setCartOpen(true)}
@@ -1171,22 +1309,24 @@ export default function App() {
           </div>
         </header>
 
-        {/* Minimalist Storefront Hero */}
+        {/* Minimalist Storefront Hero with Drop 01 Lookbook Spotlight */}
         <section className="border-b border-zinc-200 bg-zinc-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-14 sm:py-20 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-            <div className="lg:col-span-7 space-y-5">
-              <div className="text-xs font-mono text-zinc-500 flex items-center gap-2">
-                <span>Manila, Philippines</span>
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 py-12 sm:py-16 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-stretch">
+            <div className="lg:col-span-7 flex flex-col justify-center space-y-5">
+              <div className="text-xs font-mono text-zinc-500 flex flex-wrap items-center gap-2">
+                <span>Legazpi City, Philippines</span>
                 <span aria-hidden="true">·</span>
-                <span>Domestic & Worldwide Shipping</span>
+                <span>Drop 01 Release</span>
+                <span aria-hidden="true">·</span>
+                <span>Domestic &amp; Worldwide Shipping</span>
               </div>
               <h1 className="font-display text-4xl sm:text-5xl font-bold tracking-tight text-zinc-950 text-balance leading-[1.08]">
-                Heavyweight blank tees, printed to order.
+                Elevated silhouettes, designed in Legazpi City.
               </h1>
               <p className="text-base text-zinc-600 max-w-xl leading-relaxed">
-                Every Eleve piece starts with 260–300GSM combed cotton blanks and is printed in
-                small batches in our Manila studio. Order online and follow your shirt from blank
-                sourcing to dispatch in real time.
+                Structured drop-shoulder tees crafted with breathable 260–300GSM combed cotton and
+                high-contrast monochrome graphics. Cut for an effortless boxy drape across daily
+                wear.
               </p>
               <div className="pt-2 flex flex-wrap items-center gap-3">
                 <button
@@ -1200,10 +1340,10 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => trackSectionRef.current?.scrollIntoView({ behavior: 'smooth' })}
+                  onClick={() => fitGuideRef.current?.scrollIntoView({ behavior: 'smooth' })}
                   className="px-5 py-3 text-sm font-medium text-zinc-900 bg-white border border-zinc-300 hover:bg-zinc-100 rounded-lg transition-colors whitespace-nowrap"
                 >
-                  Track Live Order
+                  Size &amp; Fit Guide
                 </button>
                 <button
                   type="button"
@@ -1216,29 +1356,105 @@ export default function App() {
               </div>
             </div>
 
-            <div className="lg:col-span-5 bg-white border border-zinc-200 rounded-xl p-6 space-y-4">
-              <div className="flex items-center justify-between text-xs font-mono text-zinc-500">
-                <BrandLogoMark size="sm" />
-                <span>Manila Studio</span>
-              </div>
-              <div className="grid grid-cols-2 gap-4 pt-2 border-t border-zinc-100">
-                <div>
-                  <div className="text-xs text-zinc-500">Drop 01</div>
-                  <div className="font-mono text-2xl font-semibold text-zinc-950 mt-0.5">
-                    04 Styles
-                  </div>
+            {/* Interactive Drop 01 Spotlight Card */}
+            <div className="lg:col-span-5 bg-white border border-zinc-200 rounded-xl overflow-hidden flex flex-col justify-between">
+              <div className="px-5 py-3.5 border-b border-zinc-100 flex items-center justify-between">
+                <span className="text-xs font-mono text-zinc-500">
+                  Featured Piece · 0{spotlightIndex + 1} / 0{STORE_PRODUCTS.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSpotlightIndex(
+                        (prev) => (prev - 1 + STORE_PRODUCTS.length) % STORE_PRODUCTS.length
+                      )
+                    }
+                    className="p-1.5 text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded-md transition-colors"
+                    aria-label="Previous featured piece"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSpotlightIndex((prev) => (prev + 1) % STORE_PRODUCTS.length)}
+                    className="p-1.5 text-zinc-500 hover:text-zinc-950 hover:bg-zinc-100 rounded-md transition-colors"
+                    aria-label="Next featured piece"
+                  >
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
                 </div>
-                <div>
-                  <div className="text-xs text-zinc-500">In Production</div>
-                  <div className="font-mono text-2xl font-semibold text-zinc-950 mt-0.5">
-                    {metrics.totalActiveCount} Orders
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setActiveProductModal(spotlightProduct)}
+                className="group relative block w-full text-left focus:outline-none border-b border-zinc-100"
+                aria-label={`Inspect ${spotlightProduct.name}`}
+              >
+                <ProductGarmentImage
+                  src={spotlightProduct.image}
+                  alt={`${spotlightProduct.name} in ${spotlightColor.name}`}
+                  aspectClass="aspect-[4/3]"
+                />
+              </button>
+
+              <div className="p-5 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-mono text-zinc-500">
+                      {spotlightProduct.gsm} · {spotlightProduct.fit}
+                    </div>
+                    <h2 className="font-display text-base font-semibold text-zinc-950 mt-0.5">
+                      {spotlightProduct.name}
+                    </h2>
                   </div>
+                  <span className="font-mono text-sm font-semibold text-zinc-950 tabular-nums shrink-0">
+                    {formatPhp(spotlightProduct.pricePhp)}
+                  </span>
+                </div>
+
+                {/* 4-Piece Quick Switcher */}
+                <div className="grid grid-cols-4 gap-2">
+                  {STORE_PRODUCTS.map((item, idx) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setSpotlightIndex(idx)}
+                      className={`h-12 rounded-md overflow-hidden border transition-all ${
+                        idx === spotlightIndex
+                          ? 'border-zinc-950 ring-2 ring-zinc-950/15'
+                          : 'border-zinc-200 opacity-70 hover:opacity-100'
+                      }`}
+                      aria-label={`Preview ${item.name}`}
+                    >
+                      <img
+                        src={item.image}
+                        alt={item.name}
+                        referrerPolicy="no-referrer"
+                        className="w-full h-full object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveProductModal(spotlightProduct)}
+                    className="flex-1 h-10 text-xs font-medium text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    Inspect &amp; Select Size
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddToBag(spotlightProduct)}
+                    className="h-10 px-4 text-xs font-medium text-zinc-900 bg-white border border-zinc-200 hover:bg-zinc-50 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    Quick Add
+                  </button>
                 </div>
               </div>
-              <p className="text-xs text-zinc-500 border-t border-zinc-100 pt-3">
-                Printed in small batches from 260–300GSM blanks. Checkout syncs directly to our
-                real-time Manila production tracker.
-              </p>
             </div>
           </div>
         </section>
@@ -1379,169 +1595,160 @@ export default function App() {
           </div>
         </section>
 
-        {/* Real-Time Order Tracker Section */}
+        {/* Legazpi City Studio & Interactive Size Guide */}
         <section
-          ref={trackSectionRef}
+          ref={fitGuideRef}
           className="border-t border-zinc-200 bg-zinc-50 py-14"
-          aria-label="Live customer order tracker"
+          aria-label="Legazpi City studio and size guide"
         >
-          <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-10 space-y-6">
-            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-10 grid grid-cols-1 lg:grid-cols-12 gap-10 items-start">
+            <div className="lg:col-span-5 space-y-6">
               <div>
-                <h2 className="font-display text-2xl font-bold tracking-tight text-zinc-950">
-                  Real-Time Order Tracker
+                <div className="text-xs font-mono text-zinc-500">Legazpi City, Albay</div>
+                <h2 className="font-display text-2xl font-bold tracking-tight text-zinc-950 mt-1">
+                  Built for daily rotation, shipped from Legazpi.
                 </h2>
-                <p className="text-sm text-zinc-500 mt-1">
-                  Enter your Order ID to watch live studio updates as your blanks are sourced,
-                  printed, and packed.
-                </p>
               </div>
 
-              <div className="flex items-center gap-2 w-full md:w-auto">
-                <div className="relative flex-1 md:w-56">
-                  <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={trackOrderInput}
-                    onChange={(e) => setTrackOrderInput(e.target.value)}
-                    placeholder="Order ID (e.g. ELV-101)"
-                    className="w-full h-10 pl-9 pr-3 font-mono text-sm bg-white border border-zinc-200 rounded-lg text-zinc-950 focus:outline-none focus:border-zinc-950"
-                  />
+              <div className="divide-y divide-zinc-200 border-t border-b border-zinc-200">
+                <div className="py-4 space-y-1">
+                  <h3 className="text-sm font-semibold text-zinc-950">
+                    01. Legazpi City Origins
+                  </h3>
+                  <p className="text-sm text-zinc-600 leading-relaxed">
+                    Every silhouette and monochrome graphic is designed in Legazpi City—bringing an
+                    independent Bicol streetwear perspective to everyday essentials.
+                  </p>
                 </div>
+                <div className="py-4 space-y-1">
+                  <h3 className="text-sm font-semibold text-zinc-950">
+                    02. Boxy Drop-Shoulder Proportion
+                  </h3>
+                  <p className="text-sm text-zinc-600 leading-relaxed">
+                    Relaxed chest width with a slightly cropped length and thick ribbed collar that
+                    holds structure wash after wash.
+                  </p>
+                </div>
+                <div className="py-4 space-y-1">
+                  <h3 className="text-sm font-semibold text-zinc-950">
+                    03. Domestic &amp; Worldwide Dispatch
+                  </h3>
+                  <p className="text-sm text-zinc-600 leading-relaxed">
+                    Fast local delivery across Bicol, Metro Manila, and nationwide PH (2–5 business
+                    days), plus international courier service.
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-xs text-zinc-500 flex flex-wrap items-center gap-2">
+                <span>Care: Cold wash inside out</span>
+                <span aria-hidden="true">·</span>
+                <span>Pre-shrunk combed cotton</span>
+                <span aria-hidden="true">·</span>
+                <span>Do not iron directly on graphic</span>
               </div>
             </div>
 
-            {/* Quick-pick from Customer's Recent Orders */}
-            {myOrderIds.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <span className="text-zinc-500">Recent orders:</span>
-                {myOrderIds.slice(0, 5).map((id) => (
+            <div className="lg:col-span-7 bg-white border border-zinc-200 rounded-xl p-6 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-display text-lg font-semibold text-zinc-950">
+                    Size &amp; Fit Guide
+                  </h3>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Boxy streetwear fit. Take your usual size for a relaxed drape, or size down for
+                    a closer cut.
+                  </p>
+                </div>
+
+                <div className="inline-flex items-center p-1 bg-zinc-100 rounded-lg border border-zinc-200 self-start">
                   <button
-                    key={id}
                     type="button"
-                    onClick={() => setTrackOrderInput(id)}
-                    className={`px-2.5 py-1 font-mono rounded-md border transition-colors ${
-                      trackOrderInput.toUpperCase() === id.toUpperCase()
-                        ? 'bg-zinc-950 text-white border-zinc-950'
-                        : 'bg-white text-zinc-700 border-zinc-200 hover:border-zinc-400'
+                    onClick={() => setSizeChartUnit('in')}
+                    className={`px-3 py-1 text-xs font-mono font-medium rounded-md transition-colors ${
+                      sizeChartUnit === 'in'
+                        ? 'bg-white text-zinc-950 shadow-xs'
+                        : 'text-zinc-500 hover:text-zinc-950'
                     }`}
                   >
-                    {id}
+                    Inches (in)
                   </button>
-                ))}
-              </div>
-            )}
-
-            {loadingState ? (
-              <div className="bg-white border border-zinc-200 rounded-xl p-8 text-sm text-zinc-500">
-                Connecting to Manila studio live tracker...
-              </div>
-            ) : trackedOrder ? (
-              <div className="bg-white border border-zinc-200 rounded-xl p-6 space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-zinc-100">
-                  <div>
-                    <div className="font-mono text-xs text-zinc-500">
-                      {trackedOrder.id} · {trackedOrder.customerName} · {trackedOrder.destination}
-                    </div>
-                    <h3 className="font-display text-lg font-semibold text-zinc-950 mt-0.5 flex items-center gap-2">
-                      <span>{trackedOrder.itemName}</span>
-                      <span className="text-zinc-400 font-normal">·</span>
-                      <span className="text-sm font-normal text-zinc-600">
-                        {trackedOrder.variant} ({trackedOrder.quantity} pcs)
-                      </span>
-                    </h3>
-                  </div>
-
-                  <div className="text-left sm:text-right">
-                    <div className="text-xs text-zinc-500">Current Stage</div>
-                    <div
-                      className={`font-display text-sm font-semibold ${getStageTextTone(
-                        trackedOrder.stage
-                      )}`}
-                    >
-                      {trackedOrder.stage}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 6-Stage Progress Stepper */}
-                <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
-                  {PRODUCTION_STAGES.map((stage, idx) => {
-                    const activeIdx = PRODUCTION_STAGES.indexOf(trackedOrder.stage);
-                    const done = idx <= activeIdx;
-                    const current = idx === activeIdx;
-
-                    return (
-                      <div
-                        key={stage}
-                        className={`p-3 rounded-lg border text-xs transition-colors ${
-                          current
-                            ? 'bg-zinc-950 text-white border-zinc-950'
-                            : done
-                              ? 'bg-zinc-100 text-zinc-950 border-zinc-300'
-                              : 'bg-white text-zinc-400 border-zinc-200'
-                        }`}
-                      >
-                        <div className="font-mono text-[10px] opacity-70">0{idx + 1}</div>
-                        <div className="font-medium mt-0.5 truncate">{stage}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Live Updates Feed */}
-                <div className="space-y-3 pt-2 border-t border-zinc-100">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-zinc-700">Live Studio Updates</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCustomerChatProductContext(`${trackedOrder.id} (${trackedOrder.itemName})`);
-                        setCustomerChatOpen(true);
-                      }}
-                      className="text-xs font-medium text-zinc-900 hover:underline inline-flex items-center gap-1"
-                    >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      <span>Ask about {trackedOrder.id}</span>
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
-                    {(trackedOrder.updates || [])
-                      .slice()
-                      .reverse()
-                      .map((upd) => (
-                        <div
-                          key={upd.id}
-                          className="flex items-start justify-between gap-3 text-xs p-3 bg-zinc-50 border border-zinc-200 rounded-lg"
-                        >
-                          <div className="space-y-0.5">
-                            <div className="font-semibold text-zinc-900">{upd.stage}</div>
-                            <div className="text-zinc-600">{upd.message}</div>
-                          </div>
-                          <span className="font-mono text-[11px] text-zinc-400 whitespace-nowrap shrink-0">
-                            {formatDateTime(upd.timestamp)}
-                          </span>
-                        </div>
-                      ))}
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSizeChartUnit('cm')}
+                    className={`px-3 py-1 text-xs font-mono font-medium rounded-md transition-colors ${
+                      sizeChartUnit === 'cm'
+                        ? 'bg-white text-zinc-950 shadow-xs'
+                        : 'text-zinc-500 hover:text-zinc-950'
+                    }`}
+                  >
+                    Centimeters (cm)
+                  </button>
                 </div>
               </div>
-            ) : (
-              <div className="bg-white border border-zinc-200 rounded-xl p-8 text-center text-sm text-zinc-500">
-                No order found matching <span className="font-mono text-zinc-900">{trackOrderInput}</span>.
+
+              <div className="overflow-x-auto border border-zinc-200 rounded-lg">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-zinc-50 border-b border-zinc-200 text-[11px] font-mono text-zinc-500">
+                      <th className="py-2.5 px-4">Size</th>
+                      <th className="py-2.5 px-4">Chest Width</th>
+                      <th className="py-2.5 px-4">Body Length</th>
+                      <th className="py-2.5 px-4">Shoulder Width</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-200 text-sm">
+                    {SIZE_CHART_SPECS.map((row) => {
+                      const fmt = (valIn: number) =>
+                        sizeChartUnit === 'in'
+                          ? `${valIn.toFixed(1)} in`
+                          : `${(valIn * 2.54).toFixed(1)} cm`;
+                      return (
+                        <tr key={row.size} className="hover:bg-zinc-50/70">
+                          <td className="py-3 px-4 font-mono font-semibold text-zinc-950">
+                            {row.size}
+                          </td>
+                          <td className="py-3 px-4 font-mono tabular-nums text-zinc-700">
+                            {fmt(row.chestIn)}
+                          </td>
+                          <td className="py-3 px-4 font-mono tabular-nums text-zinc-700">
+                            {fmt(row.lengthIn)}
+                          </td>
+                          <td className="py-3 px-4 font-mono tabular-nums text-zinc-700">
+                            {fmt(row.shoulderIn)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-            )}
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 text-xs text-zinc-500">
+                <span>Tolerance of ±0.5 in / ±1.2 cm due to enzyme wash finishing.</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomerChatProductContext('Drop 01 Sizing Question');
+                    setCustomerChatOpen(true);
+                  }}
+                  className="text-zinc-950 font-medium hover:underline inline-flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Need sizing advice? Ask Studio</span>
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 
         {/* Minimal Footer */}
-        <footer className="border-t border-zinc-200 bg-white py-8 px-4 sm:px-6 lg:px-10 mt-auto">
+        <footer className="border-t border-zinc-200 bg-white py-8 px-4 sm:px-6 lg:px-10 mt-auto pb-24 sm:pb-8">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-zinc-500">
             <div className="flex items-center gap-2.5">
               <BrandLogoMark size="sm" />
               <span aria-hidden="true">·</span>
-              <span>Manila, Philippines · Local & International Shipping</span>
+              <span>Legazpi City, Philippines · Local &amp; International Shipping</span>
             </div>
             <div className="flex items-center gap-5">
               <button
@@ -1553,24 +1760,123 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setSurface('tracker')}
-                className="hover:text-zinc-950 transition-colors"
+                onClick={() => {
+                  if (ownerToken) {
+                    setSurface('tracker');
+                  } else {
+                    setPasscodeError('');
+                    setOwnerAuthModalOpen(true);
+                  }
+                }}
+                className="hover:text-zinc-950 transition-colors inline-flex items-center gap-1.5"
               >
-                Owner Production Tracker
+                <Lock className="w-3 h-3" />
+                <span>{ownerToken ? 'Owner Tracker (Unlocked)' : 'Owner Sign In'}</span>
               </button>
             </div>
           </div>
         </footer>
 
+        {/* Visible Demo Button: Switch to Admin Perspective */}
+        <button
+          type="button"
+          onClick={handleDemoSwitchToAdmin}
+          disabled={authLoading}
+          className="fixed bottom-5 left-5 z-30 h-12 px-4 rounded-xl bg-white text-zinc-950 border-2 border-zinc-950 shadow-lg hover:bg-zinc-100 transition-colors inline-flex items-center gap-2 text-sm font-semibold whitespace-nowrap"
+        >
+          <ShieldCheck className="w-4 h-4 shrink-0" />
+          <span className="hidden sm:inline">Demo: Switch to Admin</span>
+          <span className="sm:hidden">Demo: Admin</span>
+        </button>
+
         {/* Floating Ask Studio Button */}
         <button
           type="button"
           onClick={() => setCustomerChatOpen(true)}
-          className="fixed bottom-5 right-5 z-30 h-12 px-4 rounded-xl bg-zinc-950 text-white shadow-lg hover:bg-zinc-800 transition-colors inline-flex items-center gap-2 text-sm font-medium"
+          className="fixed bottom-5 right-5 z-30 h-12 px-4 rounded-xl bg-zinc-950 text-white shadow-lg hover:bg-zinc-800 transition-colors inline-flex items-center gap-2 text-sm font-medium whitespace-nowrap"
         >
-          <MessageSquare className="w-4 h-4" />
+          <MessageSquare className="w-4 h-4 shrink-0" />
           <span>Ask Studio</span>
         </button>
+
+        {/* PRIVATE OWNER SIGN IN MODAL */}
+        {ownerAuthModalOpen && (
+          <div
+            className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="bg-white border border-zinc-200 rounded-xl w-full max-w-sm shadow-xl overflow-hidden">
+              <div className="px-6 py-4 border-b border-zinc-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-zinc-950" />
+                  <h2 className="font-display text-base font-semibold text-zinc-950">
+                    Owner Tracker Access
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOwnerAuthModalOpen(false)}
+                  className="p-1.5 -mr-1.5 text-zinc-400 hover:text-zinc-950 rounded-md"
+                  aria-label="Close owner login"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleOwnerPasscodeLogin} className="p-6 space-y-4">
+                <p className="text-xs text-zinc-600 leading-relaxed">
+                  This production tracker is private to the Elevé studio owner. Enter the studio
+                  passcode to unlock orders, inventory, and customer messages.
+                </p>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-700 mb-1.5">
+                    Studio Passcode
+                  </label>
+                  <input
+                    type="password"
+                    value={passcodeInput}
+                    onChange={(e) => {
+                      setPasscodeInput(e.target.value);
+                      if (passcodeError) setPasscodeError('');
+                    }}
+                    placeholder="Enter studio passcode"
+                    className="w-full h-10 px-3 font-mono text-sm bg-white border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-950"
+                    autoFocus
+                    required
+                  />
+                  {passcodeError && (
+                    <p className="text-xs text-red-600 mt-1.5">{passcodeError}</p>
+                  )}
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full h-10 text-sm font-medium text-white bg-zinc-950 hover:bg-zinc-800 disabled:opacity-50 rounded-lg transition-colors"
+                >
+                  {authLoading ? 'Verifying...' : 'Unlock Owner Tracker'}
+                </button>
+
+                <div className="pt-3 border-t border-zinc-100 space-y-2">
+                  <div className="text-[11px] text-zinc-500 text-center">
+                    Testing or grading this demo?
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleDemoSwitchToAdmin}
+                    disabled={authLoading}
+                    className="w-full h-10 text-xs font-semibold text-zinc-950 bg-zinc-50 border border-zinc-300 hover:bg-zinc-100 rounded-lg inline-flex items-center justify-center gap-1.5 transition-colors"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Demo: Switch to Admin Perspective</span>
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* PRODUCT QUICK-VIEW MODAL */}
         {activeProductModal && (
@@ -1729,11 +2035,11 @@ export default function App() {
                   <div className="p-5 bg-zinc-50 border border-zinc-200 rounded-xl space-y-4">
                     <div className="flex items-center gap-2 text-emerald-700 font-semibold text-sm">
                       <CheckCircle2 className="w-5 h-5" />
-                      <span>Order Recorded on Eleve Tracker</span>
+                      <span>Order Confirmed</span>
                     </div>
                     <p className="text-xs text-zinc-600 leading-relaxed">
-                      Your order has been sent straight to our Manila studio queue. Track its live
-                      progress below:
+                      Thank you for your order. Our Legazpi City studio has received your details and
+                      is preparing your pieces for dispatch.
                     </p>
                     <div className="space-y-2">
                       {lastPlacedOrders.map((o) => (
@@ -1747,21 +2053,22 @@ export default function App() {
                               {o.itemName} · {o.variant} ({o.quantity} pcs)
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTrackOrderInput(o.id);
-                              setCartOpen(false);
-                              setLastPlacedOrders([]);
-                              trackSectionRef.current?.scrollIntoView({ behavior: 'smooth' });
-                            }}
-                            className="px-2.5 py-1.5 bg-zinc-950 text-white rounded-md font-medium whitespace-nowrap"
-                          >
-                            Track Live
-                          </button>
+                          <span className="font-mono font-semibold text-zinc-950 tabular-nums">
+                            {formatPhp(o.totalPricePhp)}
+                          </span>
                         </div>
                       ))}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCartOpen(false);
+                        setLastPlacedOrders([]);
+                      }}
+                      className="w-full h-10 text-xs font-medium text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg transition-colors"
+                    >
+                      Continue Shopping
+                    </button>
                   </div>
                 ) : cart.length === 0 ? (
                   <div className="py-16 text-center space-y-3">
@@ -1890,7 +2197,7 @@ export default function App() {
                           type="text"
                           value={checkoutDestination}
                           onChange={(e) => setCheckoutDestination(e.target.value)}
-                          placeholder={checkoutIntl ? 'Tokyo, JP' : 'Makati, PH'}
+                          placeholder={checkoutIntl ? 'Tokyo, JP' : 'Legazpi City, PH'}
                           className="w-full h-10 px-3 text-sm bg-white border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-950"
                           required
                         />
@@ -1945,7 +2252,7 @@ export default function App() {
                     Ask Eleve Studio
                   </h2>
                   <p className="text-xs text-zinc-500">
-                    Real-time chat with our Manila team
+                    Real-time chat with our Legazpi City team
                   </p>
                 </div>
                 <button
@@ -1980,7 +2287,7 @@ export default function App() {
                       type="text"
                       value={shopperLocationInput}
                       onChange={(e) => setShopperLocationInput(e.target.value)}
-                      placeholder="Manila, PH"
+                      placeholder="Legazpi City, PH"
                       className="w-full h-9 px-2.5 text-xs bg-white border border-zinc-200 rounded-md focus:outline-none focus:border-zinc-950"
                     />
                   </div>
@@ -2006,7 +2313,7 @@ export default function App() {
                           {msg.text}
                         </div>
                         <span className="text-[11px] font-mono text-zinc-400 mt-1 px-1">
-                          {isCustomer ? 'You' : 'Eleve Manila'} · {formatChatTime(msg.timestamp)}
+                          {isCustomer ? 'You' : 'Elevé Legazpi'} · {formatChatTime(msg.timestamp)}
                         </span>
                       </div>
                     );
@@ -2015,7 +2322,7 @@ export default function App() {
                   <div className="py-12 text-center space-y-2 text-xs text-zinc-500">
                     <MessageSquare className="w-7 h-7 text-zinc-300 mx-auto" />
                     <p className="max-w-xs mx-auto">
-                      Ask about blank sizing, print options, or shipping from Manila. Replies appear
+                      Ask about sizing, fit, colorways, or shipping from Legazpi City. Replies appear
                       here in real time.
                     </p>
                   </div>
@@ -2202,7 +2509,7 @@ export default function App() {
             className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-white bg-zinc-950 hover:bg-zinc-800 rounded-lg transition-colors whitespace-nowrap"
           >
             <ShoppingBag className="w-3.5 h-3.5" />
-            <span>Open Storefront</span>
+            <span>Demo: Customer Storefront</span>
           </button>
 
           {!confirmResetOpen ? (
@@ -2235,6 +2542,15 @@ export default function App() {
               </div>
             </div>
           )}
+
+          <button
+            type="button"
+            onClick={handleOwnerLogout}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-zinc-600 hover:text-zinc-950 hover:bg-zinc-100 border border-zinc-200 rounded-lg transition-colors whitespace-nowrap"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Lock & Exit Admin</span>
+          </button>
         </div>
       </aside>
 
@@ -2251,7 +2567,9 @@ export default function App() {
               <Menu className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-2 text-sm min-w-0">
-              <span className="text-zinc-500 hidden sm:inline whitespace-nowrap">Manila Studio</span>
+              <span className="text-zinc-500 hidden sm:inline whitespace-nowrap">
+                {ownerMode === 'demo' ? 'Demo Admin' : 'Owner Studio'}
+              </span>
               <span className="text-zinc-300 hidden sm:inline" aria-hidden="true">
                 /
               </span>
@@ -2262,6 +2580,16 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setSurface('storefront')}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs sm:text-sm font-medium text-zinc-950 bg-white border border-zinc-300 hover:bg-zinc-100 rounded-lg transition-colors whitespace-nowrap shrink-0"
+            >
+              <ShoppingBag className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Demo: Customer View</span>
+              <span className="sm:hidden">Storefront</span>
+            </button>
+
             {trackerTab === 'inventory' ? (
               <button
                 type="button"
@@ -2977,9 +3305,8 @@ export default function App() {
                           <select
                             value={activeOwnerChat.linkedOrderId ?? ''}
                             onChange={async (e) => {
-                              await fetch(`/api/chats/${encodeURIComponent(activeOwnerChat.id)}`, {
+                              await ownerFetch(`/api/chats/${encodeURIComponent(activeOwnerChat.id)}`, {
                                 method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ linkedOrderId: e.target.value }),
                               });
                             }}
@@ -3027,7 +3354,7 @@ export default function App() {
                                 {msg.text}
                               </div>
                               <span className="text-[11px] font-mono text-zinc-400 mt-1 px-1">
-                                {isOwner ? 'Eleve Manila' : activeOwnerChat.customerName} ·{' '}
+                                {isOwner ? 'Elevé Legazpi' : activeOwnerChat.customerName} ·{' '}
                                 {formatChatTime(msg.timestamp)}
                               </span>
                             </div>
@@ -3041,7 +3368,7 @@ export default function App() {
                             type="button"
                             onClick={() =>
                               setOwnerDraft(
-                                `Hi ${activeOwnerChat.customerName}! Your tee batch is in Printing now—we'll update your tracker live once it reaches Quality Check.`
+                                `Hi ${activeOwnerChat.customerName}! Your tee batch is in Printing now—we'll message you once it passes Quality Check.`
                               )
                             }
                             className="px-2.5 py-1 text-xs bg-zinc-50 border border-zinc-200 text-zinc-700 hover:text-zinc-950 hover:bg-zinc-100 rounded-md"
@@ -3052,7 +3379,7 @@ export default function App() {
                             type="button"
                             onClick={() =>
                               setOwnerDraft(
-                                `Hi ${activeOwnerChat.customerName}! Our 280GSM blanks are pre-shrunk combed cotton with a relaxed boxy drape. True to size!`
+                                `Hi ${activeOwnerChat.customerName}! Our tees are pre-shrunk 260–300GSM combed cotton with a relaxed boxy drape. True to size!`
                               )
                             }
                             className="px-2.5 py-1 text-xs bg-zinc-50 border border-zinc-200 text-zinc-700 hover:text-zinc-950 hover:bg-zinc-100 rounded-md"
@@ -3063,7 +3390,7 @@ export default function App() {
                             type="button"
                             onClick={() =>
                               setOwnerDraft(
-                                `Hi ${activeOwnerChat.customerName}, your order passed QC and is Ready to Ship from our Manila studio!`
+                                `Hi ${activeOwnerChat.customerName}, your order passed QC and is Ready to Ship from our Legazpi City studio!`
                               )
                             }
                             className="px-2.5 py-1 text-xs bg-zinc-50 border border-zinc-200 text-zinc-700 hover:text-zinc-950 hover:bg-zinc-100 rounded-md"
@@ -3532,7 +3859,7 @@ function LiveUpdateModal({
 
           <div className="flex flex-wrap gap-1.5">
             {[
-              'Blanks pulled and checked in Manila studio.',
+              'Blanks pulled and checked in Legazpi City studio.',
               'Artwork alignment verified—entering Printing now.',
               'Print cured and passed Quality Check!',
               'Packed & ready for courier pickup.',
@@ -3587,7 +3914,7 @@ function OrderFormModal({
 }) {
   const defaultDue = addDaysISO(new Date(), 7);
   const [customerName, setCustomerName] = useState(initialOrder?.customerName ?? '');
-  const [destination, setDestination] = useState(initialOrder?.destination ?? 'Makati, PH');
+  const [destination, setDestination] = useState(initialOrder?.destination ?? 'Legazpi City, PH');
   const [isInternational, setIsInternational] = useState(initialOrder?.isInternational ?? false);
   const [itemName, setItemName] = useState(initialOrder?.itemName ?? STORE_PRODUCTS[0].name);
   const [variant, setVariant] = useState(initialOrder?.variant ?? 'Pitch Black');
@@ -3700,7 +4027,7 @@ function OrderFormModal({
                 type="text"
                 value={destination}
                 onChange={(e) => setDestination(e.target.value)}
-                placeholder={isInternational ? 'Tokyo, JP' : 'Makati, PH'}
+                placeholder={isInternational ? 'Tokyo, JP' : 'Legazpi City, PH'}
                 className="w-full h-10 px-3 text-sm bg-white border border-zinc-200 rounded-lg focus:outline-none focus:border-zinc-950"
               />
             </div>
@@ -4123,7 +4450,7 @@ function MaterialFormModal({
         unit: unit.trim() || 'pcs',
         stock: Math.max(0, stock),
         minThreshold: Math.max(0, minThreshold),
-        supplier: supplier.trim() || 'Manila Studio Supply',
+        supplier: supplier.trim() || 'Legazpi Studio Supply',
       },
       initialMaterial?.id
     );
