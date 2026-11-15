@@ -40,7 +40,7 @@ Click **Owner Tracker** in the top navigation bar (or **Owner Production Tracker
 ## Run Locally
 
 ### Prerequisites
-- **Node.js** `22.6+` (for production `npm start`), or **Node.js** `18+` (for development `npm run dev`)
+- **Node.js** `22.18+` (for production `npm start`), or **Node.js** `18+` (for development `npm run dev`)
 - **npm**
 
 ### Setup & Launch
@@ -59,7 +59,7 @@ npm run dev
 
 Open **`http://localhost:3000`** in your browser.
 
-*(Optional)* To run a production build locally on Node 22.6+:
+*(Optional)* To run a production build locally on Node 22.18+:
 
 ```bash
 npm run build
@@ -68,14 +68,20 @@ npm start
 
 ---
 
-## Hosting From GitHub (Free Cloud Platforms)
+## Hosting on Render (Free Web Service)
 
-If you want to host an independent copy directly from your GitHub repository on **Render** or **Railway**:
+This repository includes a `render.yaml` configuration for **Render**:
 
-- **Build Command:** `npm install && npm run build`
-- **Start Command:** `npm start`
-- **Node Version:** `22` (configured in `package.json` `engines`)
-- **Port:** Automatically reads `process.env.PORT` (defaults to `3000`)
+1. Push this project to your GitHub repository.
+2. In **Render**, click **New + → Web Service** (or **New + → Blueprint** to auto-detect `render.yaml`).
+3. Connect your GitHub repository and verify these settings:
+   - **Runtime:** `Node`
+   - **Build Command:** `npm install && npm run build`
+   - **Start Command:** `npm start`
+   - **Instance Type:** `Free`
+4. Click **Deploy Web Service**. Render will automatically assign a public `https://....onrender.com` URL.
+
+*(Note: On Render's free tier, the service sleeps after 15 minutes of inactivity and wakes up in ~30–50 seconds on first visit. Runtime orders/chats reset if the container restarts, automatically re-seeding the sample Elevé orders and stock.)*
 
 ---
 
