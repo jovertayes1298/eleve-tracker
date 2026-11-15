@@ -1,0 +1,6 @@
+{
+  "name": "ThreadTrak",
+  "description": "Internal clothing production and order management dashboard for apparel makers, featuring Kanban & table order tracking, custom client measurements, and raw material inventory.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
